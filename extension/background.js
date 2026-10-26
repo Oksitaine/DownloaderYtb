@@ -8,12 +8,19 @@
 
 const NATIVE_HOST = 'com.oksitaine.ytb_dl';
 // format : 'mp4' | 'mp3' ; maxHeight : 'best' | '2160' | ... | '240' ; downloadDir : '' = ~/Downloads/YouTube
-const DEFAULT_SETTINGS = { format: 'mp4', maxHeight: 'best', downloadDir: '' };
+// cookiesMode : session YouTube transmise à yt-dlp, 'auto' (en secours si YouTube bloque) | 'always' | 'never'
+const DEFAULT_SETTINGS = { format: 'mp4', maxHeight: 'best', downloadDir: '', cookiesMode: 'auto' };
 const MAX_JOBS_KEPT = 30;
+// Au-delà, les téléchargements attendent leur tour : trop de requêtes simultanées font bloquer
+// l'adresse IP par YouTube. L'hôte espace aussi les démarrages de yt-dlp.
+const MAX_PARALLEL = 2;
 
-// jobId -> { id, url, title, status, progress, filename, filepath, error, port, createdAt }
+// jobId -> { id, url, title, status, progress, note, filename, filepath, error, port, createdAt }
+// status : queued (attend son tour) | preparing | downloading | processing | done | error
 const jobs = new Map();
 const jobsOrder = [];
+const waiting = [];
+let running = 0;
 let nextJobId = 1;
 
 async function getSettings() {
@@ -85,6 +92,30 @@ function askHost(message, timeoutMs = 8000) {
   });
 }
 
+// Cookies YouTube de ce navigateur, pour que yt-dlp puisse se présenter avec la session de
+// l'utilisateur quand YouTube bloque. Ils ne quittent pas l'ordinateur : l'hôte les écrit dans
+// un fichier temporaire lisible par l'utilisateur seul, supprimé à la fin du téléchargement.
+async function youtubeCookies(mode) {
+  if (mode === 'never') return null;
+  try {
+    const cookies = await chrome.cookies.getAll({ domain: 'youtube.com' });
+    return cookies.map(({ domain, hostOnly, path, secure, expirationDate, name, value }) => ({
+      domain, hostOnly, path, secure, expirationDate, name, value,
+    }));
+  } catch (_) {
+    return null;
+  }
+}
+
+// Réglages partagés avec la commande ytb-dl (terminal, IA) : même dossier, format, qualité.
+async function syncHostConfig() {
+  const s = await getSettings();
+  askHost({
+    type: 'set-config',
+    config: { download_dir: s.downloadDir || '', format: s.format, max_height: s.maxHeight, cookies: s.cookiesMode },
+  });
+}
+
 async function startJob(message) {
   const settings = await getSettings();
   const job = {
@@ -94,8 +125,11 @@ async function startJob(message) {
     title: message.title || null,
     format: settings.format,
     maxHeight: settings.maxHeight,
+    dir: settings.downloadDir || '',
+    cookiesMode: settings.cookiesMode,
     status: 'queued',
     progress: 0,
+    note: null,
     filename: null,
     filepath: null,
     error: null,
@@ -103,7 +137,40 @@ async function startJob(message) {
     port: null,
   };
   rememberJob(job);
+  waiting.push(job);
+  pump();
+  return { ok: true, jobId: job.id };
+}
 
+function pump() {
+  while (running < MAX_PARALLEL && waiting.length) {
+    runJob(waiting.shift());
+  }
+}
+
+async function runJob(job) {
+  running++;
+  job.status = 'preparing';
+  let finished = false;
+  const finish = (status, error) => {
+    if (finished) return;
+    finished = true;
+    if (status) job.status = status;
+    if (error) job.error = error;
+    job.note = null;
+    if (job.port) {
+      try {
+        job.port.disconnect();
+      } catch (_) {
+        // déjà fermé
+      }
+      job.port = null;
+    }
+    running--;
+    pump();
+  };
+
+  const cookies = await youtubeCookies(job.cookiesMode);
   const port = connectHost();
   job.port = port;
 
@@ -111,46 +178,52 @@ async function startJob(message) {
     if (!msg || msg.id !== job.id) return;
     switch (msg.type) {
       case 'progress':
-        job.status = msg.phase === 'processing' ? 'processing' : 'downloading';
+        job.status = { processing: 'processing', preparing: 'preparing' }[msg.phase] || 'downloading';
+        job.note = msg.note || null;
         if (typeof msg.progress === 'number') job.progress = msg.progress;
         if (msg.title) job.title = msg.title;
         break;
       case 'done':
-        job.status = 'done';
         job.progress = 100;
         job.filename = msg.filename;
         job.filepath = msg.filepath;
         job.folder = msg.filepath ? msg.filepath.slice(0, msg.filepath.lastIndexOf('/')).replace(/^\/Users\/[^/]+/, '~') : null;
         if (msg.title) job.title = msg.title;
-        port.disconnect();
+        finish('done');
         break;
       case 'error':
-        job.status = 'error';
-        job.error = msg.error || 'erreur inconnue';
-        port.disconnect();
+        finish('error', msg.error || 'erreur inconnue');
         break;
       default:
         break;
     }
   });
 
+  // N'est appelé que si l'hôte se ferme de lui-même (pas quand on appelle port.disconnect()).
   port.onDisconnect.addListener(() => {
+    const err = chrome.runtime.lastError;
     job.port = null;
-    if (job.status !== 'done' && job.status !== 'error') {
-      const err = chrome.runtime.lastError;
-      job.status = 'error';
-      job.error = hostErrorMessage(err && err.message);
-    }
+    if (job.status !== 'done' && job.status !== 'error') finish('error', hostErrorMessage(err && err.message));
+    else finish();
   });
 
-  port.postMessage({ type: 'download', id: job.id, url: job.url, format: job.format, maxHeight: job.maxHeight, dir: settings.downloadDir || '' });
-  return { ok: true, jobId: job.id };
+  port.postMessage({
+    type: 'download',
+    id: job.id,
+    url: job.url,
+    format: job.format,
+    maxHeight: job.maxHeight,
+    dir: job.dir,
+    cookiesMode: job.cookiesMode,
+    cookies,
+  });
 }
 
 async function handleMessage(message) {
   switch (message.type) {
     case 'health': {
-      const res = await askHost({ type: 'ping' });
+      // Le premier lancement de yt-dlp après une mise à jour peut prendre quelques secondes.
+      const res = await askHost({ type: 'ping' }, 30000);
       if (!res.ok) return { ok: false, error: res.error };
       return { ok: true, host: res.response };
     }
@@ -174,12 +247,14 @@ async function handleMessage(message) {
       if (!res.ok) return { ok: false, error: res.error };
       if (res.response.cancelled || !res.response.path) return { ok: true, cancelled: true };
       await chrome.storage.sync.set({ downloadDir: res.response.path });
+      syncHostConfig();
       return { ok: true, path: res.response.path };
     }
     case 'get-settings':
       return { ok: true, settings: await getSettings() };
     case 'set-settings':
       await chrome.storage.sync.set(message.settings || {});
+      syncHostConfig();
       return { ok: true, settings: await getSettings() };
     default:
       return { ok: false, error: 'Message inconnu : ' + message.type };

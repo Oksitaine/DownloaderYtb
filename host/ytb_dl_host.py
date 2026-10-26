@@ -2,52 +2,31 @@
 """Hôte natif (Chrome Native Messaging) pour l'extension "YouTube Download Button".
 
 Chrome lance ce script à la demande et lui parle sur stdin/stdout (messages JSON précédés
-de leur longueur sur 4 octets). Le script appelle yt-dlp, renvoie la progression, puis se
-termine quand Chrome ferme la connexion. Aucun serveur, aucun port réseau.
+de leur longueur sur 4 octets). Le script appelle yt-dlp (via ytb_core), renvoie la progression,
+puis se termine quand Chrome ferme la connexion. Aucun serveur, aucun port réseau.
 
 Messages reçus :
-  {"type": "ping"}                                  -> {"type": "pong", "ytdlp_version", "ffmpeg", "download_dir"}
-  {"type": "download", "id", "url", "format", "maxHeight", "dir"} -> suite de {"type": "progress"} puis {"type": "done"} ou {"type": "error"}
+  {"type": "ping"}                                  -> {"type": "pong", ...état de yt-dlp, ffmpeg, dossier}
+  {"type": "download", "id", "url", "format", "maxHeight", "dir", "cookies", "cookiesMode"}
+                                                    -> suite de {"type": "progress"} puis {"type": "done"} ou {"type": "error"}
+  {"type": "set-config", "config"}                  -> {"type": "config", "config"} (réglages partagés avec ytb-dl)
+  {"type": "update"}                                -> {"type": "updated", "ytdlp_version"} (met à jour yt-dlp)
   {"type": "reveal", "filepath"}                    -> {"type": "revealed"} (ouvre le Finder sur le fichier)
   {"type": "choose-folder", "current"}              -> {"type": "folder", "path"} (sélecteur de dossier macOS)
 """
 
 import json
 import os
-import re
-import shutil
 import struct
 import subprocess
 import sys
+import threading
 from pathlib import Path
-from urllib.parse import urlparse
 
-DOWNLOAD_DIR = Path(os.environ.get("YTB_DL_DIR", str(Path.home() / "Downloads" / "YouTube")))
+import ytb_core as core
 
-# Chrome lance l'hôte avec un PATH minimal : on ajoute les emplacements de Homebrew.
-for extra in ("/opt/homebrew/bin", "/usr/local/bin", str(Path.home() / ".local" / "bin")):
-    if extra not in os.environ.get("PATH", ""):
-        os.environ["PATH"] = extra + os.pathsep + os.environ.get("PATH", "")
-
-ALLOWED_HOSTS = {"www.youtube.com", "youtube.com", "m.youtube.com", "music.youtube.com", "youtu.be"}
-
-MAX_HEIGHTS = {"2160", "1440", "1080", "720", "480", "360", "240", "144"}
-
-
-def format_args(fmt, max_height):
-    """Arguments yt-dlp selon le format (mp4 / mp3) et la hauteur maximale ('best' = sans limite).
-    Avec une limite, yt-dlp prend la meilleure qualité disponible en dessous : si la vidéo
-    n'existe qu'en 240p et que la limite est 480p, il prend 240p."""
-    if fmt == "mp3":
-        return ["-x", "--audio-format", "mp3", "--audio-quality", "0"]
-    if max_height in MAX_HEIGHTS:
-        selector = f"bv*[height<={max_height}]+ba/b[height<={max_height}]/bv*+ba/b"
-    else:
-        selector = "bv*+ba/b"
-    return ["-f", selector, "--merge-output-format", "mp4"]
-
-
-PROGRESS_RE = re.compile(r"\[download\]\s+(\d+(?:\.\d+)?)%")
+_write_lock = threading.Lock()
+_jobs = []
 
 
 # ---------- protocole Native Messaging ----------
@@ -65,44 +44,21 @@ def read_message():
 
 def send_message(message):
     encoded = json.dumps(message, ensure_ascii=False).encode("utf-8")
-    sys.stdout.buffer.write(struct.pack("=I", len(encoded)))
-    sys.stdout.buffer.write(encoded)
-    sys.stdout.buffer.flush()
-
-
-# ---------- outils ----------
-
-def find_ytdlp():
-    return shutil.which("yt-dlp")
-
-
-def ytdlp_version():
-    exe = find_ytdlp()
-    if not exe:
-        return None
     try:
-        return subprocess.run([exe, "--version"], capture_output=True, text=True, timeout=15).stdout.strip()
-    except Exception:
-        return None
-
-
-def valid_youtube_url(url):
-    try:
-        parsed = urlparse(url)
-    except Exception:
-        return False
-    return parsed.scheme in ("http", "https") and parsed.hostname in ALLOWED_HOSTS
+        with _write_lock:
+            sys.stdout.buffer.write(struct.pack("=I", len(encoded)))
+            sys.stdout.buffer.write(encoded)
+            sys.stdout.buffer.flush()
+    except (BrokenPipeError, OSError):
+        # Chrome a fermé la connexion : inutile de continuer à télécharger pour personne.
+        for job in _jobs:
+            job.cancel()
 
 
 # ---------- commandes ----------
 
 def handle_ping():
-    send_message({
-        "type": "pong",
-        "ytdlp_version": ytdlp_version(),
-        "ffmpeg": bool(shutil.which("ffmpeg")),
-        "download_dir": str(DOWNLOAD_DIR),
-    })
+    send_message(dict(core.health(), type="pong"))
 
 
 def handle_reveal(message):
@@ -114,16 +70,8 @@ def handle_reveal(message):
         send_message({"type": "error", "error": "Fichier introuvable"})
 
 
-def resolve_download_dir(value):
-    """Dossier choisi dans le popup (chaîne vide = dossier par défaut)."""
-    text = str(value or "").strip()
-    if not text:
-        return DOWNLOAD_DIR
-    return Path(os.path.expanduser(text))
-
-
 def handle_choose_folder(message):
-    current = resolve_download_dir(message.get("current"))
+    current = core.resolve_dir(message.get("current"))
     if not current.is_dir():
         current = Path.home() / "Downloads"
     script = (
@@ -140,109 +88,61 @@ def handle_choose_folder(message):
     send_message({"type": "folder", "path": path})
 
 
-def handle_download(message):
+def handle_set_config(message):
+    config = message.get("config") or {}
+    try:
+        send_message({"type": "config", "config": core.save_config(config)})
+    except core.YtdlError as exc:
+        send_message({"type": "error", "error": str(exc)})
+
+
+def handle_update():
+    exe, managed = core.find_ytdlp()
+    if not managed:
+        return send_message({"type": "error", "error": "yt-dlp n'est pas géré par l'extension : relance host/installer.command"})
+    core.update_ytdlp(always=True)
+    send_message({"type": "updated", "ytdlp_version": core.ytdlp_version(exe)})
+
+
+def handle_download(message, job):
     job_id = str(message.get("id", ""))
-    url = str(message.get("url", "")).strip()
     fmt = "mp3" if str(message.get("format", "mp4")) == "mp3" else "mp4"
     max_height = str(message.get("maxHeight", "best"))
-    download_dir = resolve_download_dir(message.get("dir"))
+    mode = message.get("cookiesMode") if message.get("cookiesMode") in core.COOKIE_MODES else None
+    # Réglages partagés avec ytb-dl : le terminal et les IA téléchargent au même endroit.
+    try:
+        core.save_config({"download_dir": message.get("dir") or "", "format": fmt, "max_height": max_height,
+                          "cookies": mode})
+    except core.YtdlError:
+        pass
 
-    if not valid_youtube_url(url):
-        return send_message({"type": "error", "id": job_id, "error": "URL YouTube invalide"})
-    exe = find_ytdlp()
-    if not exe:
-        return send_message({"type": "error", "id": job_id, "error": "yt-dlp introuvable (brew install yt-dlp)"})
-    if not shutil.which("ffmpeg"):
-        return send_message({"type": "error", "id": job_id, "error": "ffmpeg introuvable (brew install ffmpeg)"})
+    def report(phase, progress=None, note=None, title=None):
+        event = {"type": "progress", "id": job_id, "phase": phase}
+        if progress is not None:
+            event["progress"] = progress
+        if note:
+            event["note"] = note
+        if title:
+            event["title"] = title
+        send_message(event)
 
     try:
-        download_dir.mkdir(parents=True, exist_ok=True)
-    except Exception as exc:
-        return send_message({"type": "error", "id": job_id, "error": f"Dossier de destination inaccessible : {exc}"})
-    cmd = [
-        exe,
-        "--no-playlist",
-        "--newline",
-        "--progress",  # --print active le mode silencieux : --progress force l'affichage de la progression
-        "--no-colors",
-        "--no-warnings",
-        "-P", str(download_dir),
-        "-o", "%(title)s [%(id)s].%(ext)s",
-        "--print", "before_dl:TITLE:%(title)s",
-        "--print", "after_move:FILEPATH:%(filepath)s",
-        "--no-simulate",
-    ] + format_args(fmt, max_height) + [url]
-
-    # yt-dlp est un programme Python : sans PYTHONUNBUFFERED, sa sortie redirigée vers un tube
-    # est mise en tampon et la progression n'arriverait qu'à la fin.
-    env = dict(os.environ, PYTHONUNBUFFERED="1")
-    try:
-        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1, env=env)
-    except Exception as exc:
-        return send_message({"type": "error", "id": job_id, "error": f"Impossible de lancer yt-dlp : {exc}"})
-
-    title = None
-    filepath = None
-    progress = 0.0
-    last_sent = -1.0
-    last_raw = 0.0
-    stream_index = 0
-    last_lines = []
-    send_message({"type": "progress", "id": job_id, "phase": "downloading", "progress": 0})
-
-    for line in proc.stdout:
-        line = line.rstrip()
-        if not line:
-            continue
-        last_lines.append(line)
-        last_lines = last_lines[-15:]
-
-        if line.startswith("TITLE:"):
-            title = line[len("TITLE:"):].strip()
-            send_message({"type": "progress", "id": job_id, "phase": "downloading", "progress": progress, "title": title})
-            continue
-        if line.startswith("FILEPATH:"):
-            filepath = line[len("FILEPATH:"):].strip()
-            continue
-
-        m = PROGRESS_RE.search(line)
-        if m:
-            raw = float(m.group(1))
-            # yt-dlp télécharge la vidéo puis l'audio : chaque flux repart de 0 %.
-            # On affiche une progression globale : vidéo 0 -> 92 %, audio 92 -> 100 %.
-            if raw < last_raw - 5:
-                stream_index += 1
-            last_raw = raw
-            pct = raw * 0.92 if stream_index == 0 else 92 + raw * 0.08
-            pct = round(min(100.0, max(progress, pct)), 1)
-            progress = pct
-            if abs(pct - last_sent) >= 1 or pct >= 100:
-                last_sent = pct
-                send_message({"type": "progress", "id": job_id, "phase": "downloading", "progress": pct})
-            continue
-
-        if "[Merger]" in line or "[ExtractAudio]" in line or "[ffmpeg]" in line:
-            send_message({"type": "progress", "id": job_id, "phase": "processing", "progress": 100})
-
-    code = proc.wait()
-    if code == 0 and filepath:
-        send_message({
-            "type": "done",
-            "id": job_id,
-            "title": title,
-            "filename": os.path.basename(filepath),
-            "filepath": filepath,
-        })
-    else:
-        error_line = next(
-            (l for l in reversed(last_lines) if "ERROR" in l or "error" in l.lower()),
-            last_lines[-1] if last_lines else f"yt-dlp a quitté avec le code {code}",
-        )
-        error_line = re.sub(r"^ERROR:\s*", "", error_line)
-        send_message({"type": "error", "id": job_id, "error": error_line[:400]})
+        result = core.download(message.get("url"), fmt, max_height, message.get("dir"),
+                               cookies=core.cookie_source(message.get("cookies")), cookies_mode=mode,
+                               report=report, job=job)
+    except core.Cancelled:
+        return
+    except core.YtdlError as exc:
+        return send_message({"type": "error", "id": job_id, "error": str(exc), "kind": exc.kind})
+    except Exception as exc:  # ne jamais laisser l'extension sans réponse
+        core.log(f"erreur inattendue : {exc!r}")
+        return send_message({"type": "error", "id": job_id, "error": f"Erreur inattendue : {exc}"})
+    send_message({"type": "done", "id": job_id, "title": result["title"], "filename": result["filename"],
+                  "filepath": result["filepath"]})
 
 
 def main():
+    threads = []
     while True:
         try:
             message = read_message()
@@ -254,13 +154,27 @@ def main():
         if kind == "ping":
             handle_ping()
         elif kind == "download":
-            handle_download(message)
+            # Dans un fil à part : la boucle continue de lire stdin pour savoir si Chrome coupe.
+            job = core.Job()
+            _jobs.append(job)
+            thread = threading.Thread(target=handle_download, args=(message, job), daemon=True)
+            thread.start()
+            threads.append(thread)
+        elif kind == "set-config":
+            handle_set_config(message)
+        elif kind == "update":
+            handle_update()
         elif kind == "reveal":
             handle_reveal(message)
         elif kind == "choose-folder":
             handle_choose_folder(message)
         else:
             send_message({"type": "error", "error": f"Message inconnu : {kind}"})
+    # Chrome a fermé la connexion : on arrête les téléchargements en cours.
+    for job in _jobs:
+        job.cancel()
+    for thread in threads:
+        thread.join(timeout=10)
 
 
 if __name__ == "__main__":

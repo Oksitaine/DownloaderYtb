@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "YouTube Download Button",
   "description": "Ajoute un bouton Télécharger à côté de J'aime / Je n'aime pas sur YouTube. Le téléchargement est fait en local par yt-dlp, lancé par Chrome à la demande.",
-  "version": "3.0.0",
+  "version": "4.0.0",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAq68elv6hUCoHNGKfR+a7wTeg72Xf6tIw9Ag5hKMvbKEHNi6Wpk9MGid9p8nkS8ZR4WFQXaXJ3xVZGtqIXpa7VVMYoBlTFUC/GNFmpZnFQtJzyTqZA160VIBDSktXdSkmfEWcFG8w/9TnDBgMlVETW8d0ZO3IE1odXCrsg5aieSPsdZtQd5uxeG2q7xHQMfx16Kd9puFMjnE3wXWcBDiaBMZisrWzZGNEgpQ9Dj6RWEzL5APsMMVmIORYT1YQOpi6xk+2DffGv2GD0qIaeZkFTKR13tzlvQDEDxVw/tKplyMeDvrtQMwOiS/NQfrlzR1G0rgfHPdvRY2bM8zpcR/yNwIDAQAB",
   "icons": {
     "16": "icons/icon16.png",
@@ -13,7 +13,8 @@
   "permissions": [
     "storage",
     "nativeMessaging",
-    "scripting"
+    "scripting",
+    "cookies"
   ],
   "background": {
     "service_worker": "background.js"
@@ -43,6 +44,6 @@
     }
   },
   "host_permissions": [
-    "https://www.youtube.com/*"
+    "*://*.youtube.com/*"
   ]
 }

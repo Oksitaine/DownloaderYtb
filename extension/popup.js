@@ -4,6 +4,7 @@ function send(message) {
 
 const STATE_LABELS = {
   queued: 'En attente',
+  preparing: 'Préparation',
   downloading: 'Téléchargement',
   processing: 'Finalisation',
   done: 'Terminé',
@@ -16,13 +17,28 @@ async function refreshHealth() {
   const hint = document.getElementById('offline-hint');
   const res = await send({ type: 'health' });
   if (res.ok && res.host && res.host.ytdlp_version && res.host.ffmpeg) {
-    dot.className = 'dot ok';
-    text.textContent = 'Prêt (yt-dlp ' + res.host.ytdlp_version + ')';
-    hint.hidden = true;
+    const host = res.host;
+    const notes = [];
+    if (host.version !== chrome.runtime.getManifest().version) {
+      notes.push('Le programme local n\'est pas à jour : relance host/installer.command, puis recharge l\'extension.');
+    }
+    if (!host.ytdlp_managed && host.ytdlp_age_days > 30) {
+      notes.push('yt-dlp date de ' + host.ytdlp_age_days + ' jours et YouTube bloque souvent les anciennes versions : '
+        + 'relance host/installer.command pour une version mise à jour automatiquement.');
+    }
+    if (!host.js_runtime) notes.push('Aucun moteur JavaScript : brew install deno (YouTube en a besoin).');
+    if (host.careful_until) {
+      const until = new Date(host.careful_until * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      notes.push('YouTube a bloqué récemment : téléchargements espacés jusqu\'à ' + until + '.');
+    }
+    dot.className = notes.length ? 'dot warn' : 'dot ok';
+    text.textContent = 'Prêt (yt-dlp ' + host.ytdlp_version + (host.ytdlp_managed ? ', mis à jour automatiquement)' : ')');
+    hint.textContent = notes.join(' ');
+    hint.hidden = !notes.length;
   } else if (res.ok) {
     dot.className = 'dot err';
     text.textContent = res.host && !res.host.ytdlp_version ? 'yt-dlp introuvable' : 'ffmpeg introuvable';
-    hint.textContent = 'Installe les outils : brew install yt-dlp ffmpeg';
+    hint.textContent = 'Installe les outils : brew install ffmpeg deno python, puis relance host/installer.command';
     hint.hidden = false;
   } else {
     dot.className = 'dot err';
@@ -54,7 +70,7 @@ async function refreshJobs() {
     state.textContent =
       job.status === 'downloading' && typeof job.progress === 'number'
         ? Math.round(job.progress) + ' %'
-        : STATE_LABELS[job.status] || job.status;
+        : (job.status === 'preparing' && job.note) || STATE_LABELS[job.status] || job.status;
     li.appendChild(name);
     li.appendChild(state);
     if (job.status === 'done' && job.filepath) {
@@ -72,11 +88,13 @@ async function refreshJobs() {
 async function init() {
   const format = document.getElementById('format');
   const quality = document.getElementById('quality');
+  const cookies = document.getElementById('cookies');
   const qualityBlock = document.getElementById('quality-block');
   const res = await send({ type: 'get-settings' });
   if (res.ok) {
     format.value = res.settings.format || 'mp4';
     quality.value = res.settings.maxHeight || 'best';
+    cookies.value = res.settings.cookiesMode || 'auto';
   }
   const syncQualityVisibility = () => { qualityBlock.hidden = format.value === 'mp3'; };
   syncQualityVisibility();
@@ -85,6 +103,7 @@ async function init() {
     syncQualityVisibility();
   });
   quality.addEventListener('change', () => send({ type: 'set-settings', settings: { maxHeight: quality.value } }));
+  cookies.addEventListener('change', () => send({ type: 'set-settings', settings: { cookiesMode: cookies.value } }));
 
   const folder = document.getElementById('folder');
   if (res.ok) folder.value = res.settings.downloadDir || '';

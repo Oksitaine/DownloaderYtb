@@ -327,7 +327,12 @@
   function applyStatus(button, job) {
     switch (job.status) {
       case 'queued':
-        setState(button, 'working', 'Préparation…', ICON_DOWNLOAD);
+        // D'autres téléchargements sont en cours : celui-ci attend son tour.
+        setState(button, 'working', 'En attente…', ICON_DOWNLOAD);
+        break;
+      case 'preparing':
+        // Note courte de l'hôte : « Mise à jour… », « Pause 20 s… », « Essai 2… ».
+        setState(button, 'working', job.note || 'Préparation…', ICON_DOWNLOAD);
         break;
       case 'downloading': {
         const pct = typeof job.progress === 'number' ? Math.round(job.progress) : null;

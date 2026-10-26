@@ -12,6 +12,7 @@
       --chip: rgba(0, 0, 0, 0.05);
       --border: rgba(0, 0, 0, 0.1);
       --ok: #1e8e3e;
+      --warn: #e37400;
       --err: #c00;
     }
     @media (prefers-color-scheme: dark) {
@@ -22,6 +23,7 @@
         --chip: rgba(255, 255, 255, 0.1);
         --border: rgba(255, 255, 255, 0.2);
         --ok: #4caf50;
+        --warn: #fbbc04;
         --err: #ff6b6b;
       }
     }
@@ -38,6 +40,7 @@
     .status { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
     .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--muted); flex-shrink: 0; }
     .dot.ok { background: var(--ok); }
+    .dot.warn { background: var(--warn); }
     .dot.err { background: var(--err); }
     .hint { color: var(--muted); font-size: 12px; line-height: 1.4; }
     code { font-family: Menlo, monospace; font-size: 11px; background: var(--chip); padding: 1px 4px; border-radius: 3px; }
@@ -101,6 +104,14 @@
     </select>
     <div class="hint">Si la vidéo n'existe pas dans cette qualité, la meilleure en dessous est prise.</div>
   </div>
+
+  <label for="cookies">Session YouTube</label>
+  <select id="cookies">
+    <option value="auto">En secours, si YouTube bloque</option>
+    <option value="always">Toujours</option>
+    <option value="never">Jamais</option>
+  </select>
+  <div class="hint">Contre les blocages : les cookies YouTube de ce navigateur sont passés à yt-dlp, sur cet ordinateur seulement.</div>
 
   <label for="folder">Dossier de destination</label>
   <div class="row">

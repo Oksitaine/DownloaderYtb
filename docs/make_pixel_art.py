@@ -771,7 +771,7 @@ def scene_popup():
     px, py = W - 8 - pw, 24
     x0, iw = px + 8, pw - 16
     rows = [("Synthwave en pixel art", "Terminé", GREEN, True), ("Lofi pixel beats - 2 h", "47 %", MUTED, False)]
-    H = py + 178
+    H = py + 220
 
     def select(c, x, y, w, label):
         c.framed(x, y, w, 13, 3, LINE, BG)
@@ -781,7 +781,7 @@ def scene_popup():
     def draw(c):
         c.round_rect(0, 0, W, H, 6, "#181818")
         # la page YouTube, en retrait derrière le popup
-        for i in range(4):
+        for i in range(5):
             y = 26 + i * 40
             c.round_rect(8, y, 56, 30, 3, "#262626")
             c.hline(8, y + 33, 50, "#262626")
@@ -803,13 +803,17 @@ def scene_popup():
         c.text(x0, y, "YouTube Download Button", TEXT)
         y += 14
         c.circle(x0 + 2.5, y + 3.5, 2.5, GREEN)
-        c.text(x0 + 9, y, "Prêt (yt-dlp 2026.10.18)", TEXT)
-        y += 14
+        c.text(x0 + 9, y, "Prêt (yt-dlp 2026.10.23,", TEXT)
+        c.text(x0 + 9, y + 10, "mis à jour automatiquement)", TEXT)
+        y += 24
         c.text(x0, y, "Format", TEXT)
         select(c, x0, y + 10, iw, "Vidéo (MP4)")
         y += 28
         c.text(x0, y, "Qualité maximale", TEXT)
         select(c, x0, y + 10, iw, "1080p max")
+        y += 28
+        c.text(x0, y, "Session YouTube", TEXT)
+        select(c, x0, y + 10, iw, fit("En secours, si YouTube bloque", iw - 18))
         y += 28
         c.text(x0, y, "Dossier de destination", TEXT)
         bw = text_width("Choisir…") + 10
@@ -834,7 +838,8 @@ def scene_popup():
             y += 15
         assert y + 6 <= H - 8, "popup trop court"
 
-    return ("popup", "Le popup de l'extension : état de yt-dlp, format, qualité, dossier et téléchargements",
+    return ("popup", "Le popup de l'extension : état de yt-dlp, format, qualité, session YouTube, dossier et "
+            "téléchargements",
             W, H, draw, [])
 
 
@@ -883,6 +888,69 @@ def scene_install():
             W, H, draw, [])
 
 
+def scene_ai():
+    W, H = 264, 134
+    lx, top, step = 16, 22, 11
+    lines = [
+        ("prompt", "Résume youtu.be/x7Kq2pLm9Va", None),
+        ("tool", "youtube · transcript", "(fr)"),
+        ("result", "Synthwave en pixel art · 3:32 · auto", None),
+        ("answer", "Un coucher de soleil synthwave dessiné", None),
+        ("text", "pixel par pixel : ciel en dégradé,", None),
+        ("text", "soleil rayé et sol quadrillé.", None),
+        ("prompt", "Garde l'audio en MP3", None),
+        ("tool", "youtube · download", "(mp3)"),
+        ("result", "~/Downloads/YouTube/…[x7Kq2pLm9Va].mp3", None),
+    ]
+    assert all(lx + 14 + text_width(t) + (text_width(e) + 4 if e else 0) <= W - 12 for _, t, e in lines), "ligne trop longue"
+
+    def draw(c):
+        c.round_rect(0, 0, W, H, 6, BG)
+        c.framed(6, 5, W - 12, H - 10, 4, "#3a3a3a", "#141414")
+        c.round_rect(7, 6, W - 14, 10, 3, "#2a2a2a")
+        c.rect(7, 12, W - 14, 4, "#2a2a2a")
+        for i, color in enumerate(("#ff5f57", "#febc2e", "#28c840")):
+            c.circle(14.5 + i * 7, 11, 2, color)
+        c.ctext(W // 2, 8, "claude · ~/projets", DIM)
+
+    # étape : (lignes affichées, fraction tapée de la dernière question, progression du download)
+    frames = [(9, None, None), (1, 0.45, None), (1, None, None), (2, None, None), (3, None, None), (6, None, None),
+              (7, 0.5, None), (7, None, None), (8, None, None), (9, None, 23), (9, None, 64)]
+
+    def chat(c, k):
+        shown, typed, progress = frames[k]
+        for i, (kind, text, extra) in enumerate(lines[:shown]):
+            y = top + i * step
+            last = i == shown - 1
+            if kind == "prompt":
+                if last and typed is not None:
+                    text = text[:round(len(text) * typed)]
+                c.text(lx, y, ">", MUTED)
+                w = c.text(lx + 8, y, text, TEXT)
+                if last and (typed is not None or shown in (1, 7)):
+                    c.rect(lx + 8 + w + 2, y, 4, 7, TEXT)  # curseur
+            elif kind == "tool":
+                c.circle(lx + 2.5, y + 3.5, 2.5, TERM_GREEN)
+                w = c.text(lx + 8, y, text, TEXT)
+                c.text(lx + 8 + w + 4, y, extra, DIM)
+            elif kind == "result":
+                c.sprite(lx + 3, y, ["#..", "#..", "#..", "###"], {"#": DIM})
+                if last and progress is not None:
+                    c.rect(lx + 9, y + 1, 60, 5, "#2a2a2a")
+                    c.rect(lx + 9, y + 1, round(60 * progress / 100), 5, TERM_GREEN)
+                    c.text(lx + 74, y, f"{progress} %", DIM)
+                else:
+                    c.text(lx + 9, y, text, MUTED)
+            else:
+                if kind == "answer":
+                    c.circle(lx + 2.5, y + 3.5, 2.5, TEXT)
+                c.text(lx + 8, y, text, TEXT)
+
+    durations = [3.4, 0.35, 0.6, 0.6, 0.7, 1.4, 0.35, 0.6, 0.6, 0.5, 0.5]
+    return ("ia", "Claude Code utilise le serveur MCP youtube : transcription d'une vidéo, puis téléchargement de "
+            "l'audio en MP3", W, H, draw, [Anim(durations, chat)])
+
+
 # ---------- export ----------
 
 def grid_paths(grid):
@@ -918,6 +986,20 @@ def esc(s):
     return s.replace("&", "&amp;").replace("<", "&lt;").replace('"', "&quot;")
 
 
+def bridge(diff_row, img_row):
+    """Comble les trous d'une ligne de calque entre deux pixels de même couleur quand l'image a
+    déjà cette couleur dans le trou : le résultat est identique, avec bien moins de rectangles."""
+    out, last_x = diff_row[:], None
+    for x, color in enumerate(diff_row):
+        if color is None:
+            continue
+        if last_x is not None and x - last_x > 1 and diff_row[last_x] == color \
+                and all(img_row[i] == color for i in range(last_x + 1, x)):
+            out[last_x + 1:x] = [color] * (x - last_x - 1)
+        last_x = x
+    return out
+
+
 def render(scene):
     name, title, w, h, draw, anims = scene
     background = Canvas(w, h)
@@ -936,7 +1018,8 @@ def render(scene):
         t = anim.durations[0]
         for k in range(1, len(anim.durations)):
             img = frame(ai, k)
-            diff = [[p if p != b else None for p, b in zip(row, brow)] for row, brow in zip(img.px, base.px)]
+            diff = [bridge([p if p != b else None for p, b in zip(row, brow)], row)
+                    for row, brow in zip(img.px, base.px)]
             layers.append((f"a{ai}f{k}", diff, t / total, (t + anim.durations[k]) / total, total, img))
             t += anim.durations[k]
     return name, title, base, layers
@@ -977,7 +1060,7 @@ def to_png(canvas, scale):
 
 def main():
     png_dir = sys.argv[sys.argv.index("--png") + 1] if "--png" in sys.argv else None
-    for scene in (scene_banner(), scene_button(), scene_how(), scene_popup(), scene_install()):
+    for scene in (scene_banner(), scene_button(), scene_how(), scene_popup(), scene_install(), scene_ai()):
         name, title, base, layers = render(scene)
         path = os.path.join(HERE, f"{name}.svg")
         with open(path, "w", encoding="utf-8") as f:
