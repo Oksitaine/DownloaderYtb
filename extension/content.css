@@ -1,0 +1,161 @@
+/* Bouton "Télécharger".
+   Le bouton reprend les classes CSS des boutons voisins de YouTube (Partager, ...),
+   il hérite donc exactement de leur apparence, y compris en mode sombre et au survol.
+   Les règles ci-dessous n'ajoutent que : l'espacement, la barre de progression,
+   les couleurs d'état, et un style de secours si les classes YouTube changent. */
+
+#ytb-dl-wrapper {
+  display: inline-flex;
+  align-items: center;
+  margin: 0 8px;
+  flex-shrink: 0;
+}
+
+#ytb-dl-button {
+  position: relative;
+  overflow: hidden;
+  cursor: pointer;
+}
+
+#ytb-dl-button:disabled {
+  cursor: progress;
+  opacity: 1;
+}
+
+#ytb-dl-button .ytb-dl-icon svg {
+  width: 24px;
+  height: 24px;
+  display: block;
+}
+
+#ytb-dl-button .ytb-dl-icon,
+#ytb-dl-button .ytb-dl-text {
+  position: relative;
+  z-index: 1;
+}
+
+/* Barre de progression intégrée à la pilule pendant le téléchargement */
+#ytb-dl-button[data-state="working"]::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: var(--ytb-dl-progress, 0%);
+  background-color: rgba(0, 0, 0, 0.12);
+  transition: width 0.3s ease;
+  pointer-events: none;
+}
+html[dark] #ytb-dl-button[data-state="working"]::before {
+  background-color: rgba(255, 255, 255, 0.18);
+}
+
+#ytb-dl-button[data-state="done"] {
+  color: #065fd4;
+}
+html[dark] #ytb-dl-button[data-state="done"] {
+  color: #3ea6ff;
+}
+
+#ytb-dl-button[data-state="error"] {
+  color: #c00;
+}
+html[dark] #ytb-dl-button[data-state="error"] {
+  color: #ff4e45;
+}
+
+/* ---- Style de secours (activé seulement si les classes YouTube ne stylent rien) ---- */
+#ytb-dl-button.ytb-dl-fallback {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  height: 36px;
+  min-width: 36px;
+  padding: 0 16px;
+  margin: 0;
+  border: none;
+  border-radius: 18px;
+  background-color: rgba(0, 0, 0, 0.05);
+  color: #0f0f0f;
+  font-family: "Roboto", "Arial", sans-serif;
+  font-size: 14px;
+  line-height: 36px;
+  font-weight: 500;
+  letter-spacing: normal;
+  text-transform: none;
+  white-space: nowrap;
+  outline: none;
+  -webkit-tap-highlight-color: transparent;
+  transition: background-color 0.1s ease;
+}
+html[dark] #ytb-dl-button.ytb-dl-fallback {
+  background-color: rgba(255, 255, 255, 0.1);
+  color: #f1f1f1;
+}
+#ytb-dl-button.ytb-dl-fallback:hover {
+  background-color: rgba(0, 0, 0, 0.1);
+}
+html[dark] #ytb-dl-button.ytb-dl-fallback:hover {
+  background-color: rgba(255, 255, 255, 0.2);
+}
+#ytb-dl-button.ytb-dl-fallback:focus-visible {
+  outline: 2px solid currentColor;
+  outline-offset: -2px;
+}
+#ytb-dl-button.ytb-dl-fallback .ytb-dl-icon {
+  display: inline-flex;
+  width: 24px;
+  height: 24px;
+  margin-left: -6px;
+  margin-right: 6px;
+  flex-shrink: 0;
+}
+
+/* Sur les écrans étroits, YouTube masque les libellés : on fait pareil. */
+@media (max-width: 656px) {
+  #ytb-dl-button.ytb-dl-fallback {
+    padding: 0 6px;
+  }
+  #ytb-dl-button.ytb-dl-fallback .ytb-dl-icon {
+    margin: 0;
+  }
+  #ytb-dl-button .ytb-dl-text {
+    display: none;
+  }
+}
+
+/* Petit toast d'information en bas à gauche */
+#ytb-dl-toast {
+  position: fixed;
+  left: 24px;
+  bottom: 24px;
+  z-index: 2147483647;
+  max-width: 420px;
+  padding: 12px 16px;
+  border-radius: 8px;
+  background-color: rgba(0, 0, 0, 0.85);
+  color: #fff;
+  font-family: "Roboto", "Arial", sans-serif;
+  font-size: 14px;
+  line-height: 20px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+  opacity: 0;
+  transform: translateY(8px);
+  transition: opacity 0.2s ease, transform 0.2s ease;
+  pointer-events: none;
+}
+html[dark] #ytb-dl-toast {
+  background-color: #f1f1f1;
+  color: #0f0f0f;
+}
+
+#ytb-dl-toast.ytb-dl-toast--visible {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+#ytb-dl-toast.ytb-dl-toast--error {
+  background-color: #b3261e;
+  color: #fff;
+}

@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <title>YouTube Download Button</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      --bg: #fff;
+      --fg: #0f0f0f;
+      --muted: #606060;
+      --chip: rgba(0, 0, 0, 0.05);
+      --border: rgba(0, 0, 0, 0.1);
+      --ok: #1e8e3e;
+      --err: #c00;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #0f0f0f;
+        --fg: #f1f1f1;
+        --muted: #aaa;
+        --chip: rgba(255, 255, 255, 0.1);
+        --border: rgba(255, 255, 255, 0.2);
+        --ok: #4caf50;
+        --err: #ff6b6b;
+      }
+    }
+    body {
+      width: 320px;
+      margin: 0;
+      padding: 16px;
+      background: var(--bg);
+      color: var(--fg);
+      font-family: Roboto, Arial, sans-serif;
+      font-size: 13px;
+    }
+    h1 { font-size: 15px; margin: 0 0 12px; }
+    .status { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+    .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--muted); flex-shrink: 0; }
+    .dot.ok { background: var(--ok); }
+    .dot.err { background: var(--err); }
+    .hint { color: var(--muted); font-size: 12px; line-height: 1.4; }
+    code { font-family: Menlo, monospace; font-size: 11px; background: var(--chip); padding: 1px 4px; border-radius: 3px; }
+    label { display: block; font-weight: 500; margin: 12px 0 6px; }
+    select {
+      width: 100%; padding: 6px 8px; border-radius: 6px;
+      border: 1px solid var(--border); background: var(--bg); color: var(--fg); font-size: 13px;
+    }
+    h2 { font-size: 13px; margin: 16px 0 6px; color: var(--muted); font-weight: 500; }
+    ul { list-style: none; padding: 0; margin: 0; max-height: 180px; overflow-y: auto; }
+    li { display: flex; align-items: center; gap: 8px; padding: 6px 0; border-top: 1px solid var(--border); }
+    li .name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    li .state { color: var(--muted); font-size: 12px; flex-shrink: 0; }
+    li .state.done { color: var(--ok); }
+    li .state.error { color: var(--err); }
+    button.reveal {
+      border: none; background: var(--chip); color: var(--fg); border-radius: 12px;
+      padding: 3px 8px; font-size: 11px; cursor: pointer; flex-shrink: 0;
+    }
+    button.reveal:hover { background: var(--border); }
+    .empty { color: var(--muted); font-style: italic; padding: 6px 0; }
+    .row { display: flex; gap: 6px; }
+    input[type="text"] {
+      flex: 1; min-width: 0; padding: 6px 8px; border-radius: 6px;
+      border: 1px solid var(--border); background: var(--bg); color: var(--fg); font-size: 12px;
+    }
+    button.small {
+      border: none; background: var(--chip); color: var(--fg); border-radius: 6px;
+      padding: 0 10px; font-size: 12px; cursor: pointer; white-space: nowrap;
+    }
+    button.small:hover { background: var(--border); }
+    .hint.saved { color: var(--ok); }
+  </style>
+</head>
+<body>
+  <h1>YouTube Download Button</h1>
+
+  <div class="status">
+    <span class="dot" id="dot"></span>
+    <span id="status-text">Vérification…</span>
+  </div>
+  <div class="hint" id="offline-hint" hidden></div>
+
+  <label for="format">Format</label>
+  <select id="format">
+    <option value="mp4">Vidéo (MP4)</option>
+    <option value="mp3">Audio seulement (MP3)</option>
+  </select>
+
+  <div id="quality-block">
+    <label for="quality">Qualité maximale</label>
+    <select id="quality">
+      <option value="best">Toujours la meilleure disponible</option>
+      <option value="2160">2160p (4K) max</option>
+      <option value="1440">1440p max</option>
+      <option value="1080">1080p max</option>
+      <option value="720">720p max</option>
+      <option value="480">480p max</option>
+      <option value="360">360p max</option>
+      <option value="240">240p max</option>
+    </select>
+    <div class="hint">Si la vidéo n'existe pas dans cette qualité, la meilleure en dessous est prise.</div>
+  </div>
+
+  <label for="folder">Dossier de destination</label>
+  <div class="row">
+    <input id="folder" type="text" placeholder="~/Downloads/YouTube (par défaut)" spellcheck="false">
+    <button id="choose-folder" type="button" class="small">Choisir…</button>
+  </div>
+  <div class="hint">Vide = <code>~/Downloads/YouTube</code>. Tu peux aussi taper un chemin.</div>
+
+  <h2>Téléchargements de cette session</h2>
+  <ul id="jobs"></ul>
+
+  <script src="popup.js"></script>
+</body>
+</html>
